@@ -7,11 +7,11 @@ from matplotlib import pyplot as plt
 
 # replace these with your IDs:
 ID1 = '212047542'
-ID2 = '987654321'
+ID2 = '327703013'
 
 # Harris corner detector parameters - you may change them.
 K = 0.05
-CHECKERBOARD_THRESHOLD = 1e1
+CHECKERBOARD_THRESHOLD = 1e2
 GIRAFFE_THRESHOLD = 1e6
 BUTTERFLY_IMAGE = 'butterfly.jpg'
 

@@ -6,8 +6,8 @@ from scipy.interpolate import griddata
 
 
 # FILL IN YOUR ID
-ID1 = 123456789
-ID2 = 987654321
+ID1 = 212047542
+ID2 = 327703013
 
 
 PYRAMID_FILTER = 1.0 / 256 * np.array([[1, 4, 6, 4, 1],
@@ -65,6 +65,16 @@ def build_pyramid(image: np.ndarray, num_levels: int) -> list[np.ndarray]:
     """
     pyramid = [image.copy()]
     """INSERT YOUR CODE HERE."""
+    # Iterate over the levels 
+    for i in range(num_levels):
+        # Convolve the PYRAMID_FILTER with the image from the previous level 
+        blurred = signal.convolve2d(pyramid[i], PYRAMID_FILTER, boundary='symm', mode='same')
+        # Decimate the result using indexing: simply pick every second entry 
+        decimated = blurred[::2, ::2]
+        # Append the filtered->decimated result to the end of the list 
+        pyramid.append(decimated)
+        
+    # The list length should be num_levels + 1 
     return pyramid
 
 
@@ -109,6 +119,40 @@ def lucas_kanade_step(I1: np.ndarray,
     """
     du = np.zeros(I1.shape)
     dv = np.zeros(I1.shape)
+    # (1) Calculate Ix and Iy by convolving I2 with the appropriate filters 
+    Ix = signal.convolve2d(I2, X_DERIVATIVE_FILTER, boundary='symm', mode='same')
+    Iy = signal.convolve2d(I2, Y_DERIVATIVE_FILTER, boundary='symm', mode='same')
+    
+    # (2) Calculate It from I1 and I2 
+    It = I2 - I1
+    
+    h, w = I1.shape
+    half_win = window_size // 2
+
+    # (3.2) Loop over all pixels in the image, ignoring boundary pixels 
+    for i in range(half_win, h - half_win):
+        for j in range(half_win, w - half_win):
+            
+            # (3.3) Extract NxN window for Ix, Iy, and It 
+            ix_win = Ix[i - half_win:i + half_win + 1, j - half_win:j + half_win + 1].flatten()
+            iy_win = Iy[i - half_win:i + half_win + 1, j - half_win:j + half_win + 1].flatten()
+            it_win = It[i - half_win:i + half_win + 1, j - half_win:j + half_win + 1].flatten()
+
+            # (3.4) Solve for (u, v) using Least-Squares solution 
+            # A * [u, v]^T = -b where A = [Ix, Iy] and b = It
+            A = np.stack((ix_win, iy_win), axis=1)
+            b = -it_win
+
+            # Calculate ATA and ATb for the normal equations
+            ATA = A.T @ A
+            ATb = A.T @ b
+
+            # Solve if the system is well-defined (rank 2) 
+            if np.linalg.matrix_rank(ATA) == 2:
+                nu = np.linalg.solve(ATA, ATb)
+                du[i, j] = nu[0]
+                dv[i, j] = nu[1]
+            # Otherwise, (u, v) remai
     return du, dv
 
 
@@ -145,6 +189,38 @@ def warp_image(image: np.ndarray, u: np.ndarray, v: np.ndarray) -> np.ndarray:
     """INSERT YOUR CODE HERE.
     Replace image_warp with something else.
     """
+    h, w = image.shape
+
+    # (1) resize the u and v to the shape of the image if they don't match
+    if u.shape != (h, w) or v.shape != (h, w):
+        u_resized = cv2.resize(u, (w, h))
+        v_resized = cv2.resize(v, (w, h))
+        
+        # (2) normalize the shift values according to the resizing factor
+        u = u_resized * (w / u.shape[1])
+        v = v_resized * (h / v.shape[0])
+
+    # (3) define the grid-points using a flattened version of the meshgrid
+    x = np.arange(w)
+    y = np.arange(h)
+    mesh_x, mesh_y = np.meshgrid(x, y)
+    
+    # points are the original grid coordinates (0 to w-1, 0 to h-1)
+    points = np.stack((mesh_x.flatten(), mesh_y.flatten()), axis=1)
+    
+    # values are the pixel intensities of the source image
+    values = image.flatten()
+    
+    # xi are the points we wish to interpolate (meshgrid shifted by u and v)
+    xi = np.stack(((mesh_x + u).flatten(), (mesh_y + v).flatten()), axis=1)
+    
+    # (4) perform interpolation using griddata with np.nan as fill_value
+    image_warp = griddata(points, values, xi, method='linear', fill_value=np.nan)
+    image_warp = image_warp.reshape((h, w))
+    
+    # (5) fill the nan holes with the source image values
+    nan_mask = np.isnan(image_warp)
+    image_warp[nan_mask] = image[nan_mask]
     return image_warp
 
 

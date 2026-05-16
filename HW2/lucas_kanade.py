@@ -281,10 +281,35 @@ def lucas_kanade_optical_flow(I1: np.ndarray,
     v = np.zeros(pyarmid_I2[-1].shape)
     """INSERT YOUR CODE HERE.
        Replace u and v with their true value."""
-    u = np.zeros(I1.shape)
-    v = np.zeros(I1.shape)
-    return u, v
+    # (4) For every level in the image pyramid, starting from the smallest image (deepest level)
+    for level in range(num_levels, -1, -1):
+        level_I1 = pyramid_I1[level]
+        level_I2 = pyarmid_I2[level]
+        
+        # Scale and resize u and v to match the current pyramid level shape
+        h_curr, w_curr = level_I1.shape
+        if u.shape != (h_curr, w_curr):
+            u_resized = cv2.resize(u, (w_curr, h_curr))
+            v_resized = cv2.resize(v, (w_curr, h_curr))
+            
+            # Update flow fields scaled by the ratio of current vs previous level dimensions
+            u = u_resized * (w_curr / u.shape[1])
+            v = v_resized * (h_curr / v.shape[0])
+            
+        # (4.2) Repeat for max_iter iterations at each level
+        for _ in range(max_iter):
+            # (4.1) Warp I2 from that level according to the current u and v
+            I2_warp = warp_image(level_I2, u, v)
+            
+            # (4.2.1) Perform a Lucas Kanade Step with the I1 decimated image 
+            # and the current I2_warp to get the residual displacements
+            du, dv = lucas_kanade_step(level_I1, I2_warp, window_size)
+            
+            # Accumulate the updates into the running flow fields
+            u += du
+            v += dv
 
+    return u, v
 
 def lucas_kanade_video_stabilization(input_video_path: str,
                                      output_video_path: str,

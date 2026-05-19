@@ -117,6 +117,7 @@ def lucas_kanade_step(I1: np.ndarray,
     """INSERT YOUR CODE HERE.
     Calculate du and dv correctly.
     """
+
     du = np.zeros(I1.shape)
     dv = np.zeros(I1.shape)
     # (1) Calculate Ix and Iy by convolving I2 with the appropriate filters 
@@ -265,10 +266,10 @@ def lucas_kanade_optical_flow(I1: np.ndarray,
     """INSERT YOUR CODE HERE.
         Replace image_warp with something else.
         """
-    h_factor = int(np.ceil(I1.shape[0] / (2 ** (num_levels - 1 + 1))))
-    w_factor = int(np.ceil(I1.shape[1] / (2 ** (num_levels - 1 + 1))))
-    IMAGE_SIZE = (w_factor * (2 ** (num_levels - 1 + 1)),
-                  h_factor * (2 ** (num_levels - 1 + 1)))
+    h_factor = int(np.ceil(I1.shape[0] / (2 ** (num_levels - 1))))
+    w_factor = int(np.ceil(I1.shape[1] / (2 ** (num_levels - 1))))
+    IMAGE_SIZE = (w_factor * (2 ** (num_levels - 1)),
+                  h_factor * (2 ** (num_levels - 1)))
     if I1.shape != IMAGE_SIZE:
         I1 = cv2.resize(I1, IMAGE_SIZE)
     if I2.shape != IMAGE_SIZE:
@@ -362,7 +363,62 @@ def lucas_kanade_video_stabilization(input_video_path: str,
        all windows.
     """
     """INSERT YOUR CODE HERE."""
-    pass
+    cap = cv2.VideoCapture(input_video_path)
+    params = get_video_parameters(cap)
+    fourcc = cv2.VideoWriter_fourcc(*'XVID') 
+    fps = params['fps']
+    size = (params['width'], params['height'])
+    frame_count = params['frame_count']
+    out = cv2.VideoWriter(output_video_path, fourcc, fps, size, isColor=False)
+    h_factor = int(np.ceil(size[1] / (2 ** (num_levels - 1))))
+    w_factor = int(np.ceil(size[0] / (2 ** (num_levels - 1))))
+    IMAGE_SIZE = (w_factor * (2 ** (num_levels - 1)),
+                  h_factor * (2 ** (num_levels - 1)))
+    
+    _, first_frame = cap.read()
+    gray_first_frame = cv2.cvtColor(first_frame, cv2.COLOR_BGR2GRAY)
+    out.write(gray_first_frame)
+
+    resize_first_frame = cv2.resize(gray_first_frame, IMAGE_SIZE)
+    print(f"Resized first frame shape: {resize_first_frame.shape}")
+    sum_u, sum_v = np.zeros((IMAGE_SIZE[1], IMAGE_SIZE[0])), np.zeros((IMAGE_SIZE[1], IMAGE_SIZE[0]))
+    print(f"Initialized sum_u and sum_v with shape: {sum_u.shape}")
+    prev_frame = resize_first_frame.copy()
+    half_win = window_size // 2
+
+    for i in tqdm(range(1, frame_count)):
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        resize_frame = cv2.resize(gray_frame, IMAGE_SIZE)
+
+        u, v = lucas_kanade_optical_flow(prev_frame, resize_frame, window_size, max_iter, num_levels)
+
+        valid_u = u[half_win:-half_win, half_win:-half_win]
+        valid_v = v[half_win:-half_win, half_win:-half_win]
+
+        mean_u = np.mean(valid_u)
+        mean_v = np.mean(valid_v)
+
+        u[half_win:-half_win, half_win:-half_win] = mean_u
+        v[half_win:-half_win, half_win:-half_win] = mean_v
+
+        sum_u += u
+        sum_v += v
+
+        prev_frame = resize_frame.copy()
+        warped_frame = warp_image(gray_frame, sum_u, sum_v)
+        final_frame = cv2.resize(warped_frame, size)
+
+        final_frame_uint8 = np.clip(final_frame, 0, 255).astype(np.uint8)
+        out.write(final_frame_uint8)
+
+
+    cap.release()
+    out.release()
+    cv2.destroyAllWindows()
 
 
 def faster_lucas_kanade_step(I1: np.ndarray,
@@ -390,9 +446,56 @@ def faster_lucas_kanade_step(I1: np.ndarray,
 
     du = np.zeros(I1.shape)
     dv = np.zeros(I1.shape)
-    """INSERT YOUR CODE HERE.
-    Calculate du and dv correctly.
-    """
+    
+    # (1) Calculate Ix and Iy by convolving I2 with the appropriate filters 
+    Ix = signal.convolve2d(I2, X_DERIVATIVE_FILTER, boundary='symm', mode='same')
+    Iy = signal.convolve2d(I2, Y_DERIVATIVE_FILTER, boundary='symm', mode='same')
+    
+    # (2) Calculate It from I1 and I2 
+    It = I2 - I1
+    
+    h, w = I1.shape
+    half_win = window_size // 2
+
+    # --- HARRIS CORNER DETECTION CHECK ---
+    if h > 256 and w > 256:
+        # Normalize I2 to 0-255 range and cast to uint8 for OpenCV compatibility
+        I2_uint8 = cv2.normalize(I2, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
+        harris_response = cv2.cornerHarris(I2_uint8, blockSize=2, ksize=3, k=0.04)
+        
+        # Create a boolean matrix where True represents a strong corner pixel
+        is_corner = harris_response > 0.02 * harris_response.max()
+    else:
+        # For small images, treat all pixels as valid candidates (all True matrix)
+        is_corner = np.ones((h, w), dtype=bool)
+
+    # (3.2) Loop over all pixels in the image, ignoring boundary pixels 
+    for i in range(half_win, h - half_win):
+        for j in range(half_win, w - half_win):
+            
+            # Skip calculation entirely if this pixel is not a corner
+            if not is_corner[i, j]:
+                continue
+            
+            # (3.3) Extract NxN window for Ix, Iy, and It 
+            ix_win = Ix[i - half_win:i + half_win + 1, j - half_win:j + half_win + 1].flatten()
+            iy_win = Iy[i - half_win:i + half_win + 1, j - half_win:j + half_win + 1].flatten()
+            it_win = It[i - half_win:i + half_win + 1, j - half_win:j + half_win + 1].flatten()
+
+            # (3.4) Solve for (u, v) using Least-Squares solution 
+            A = np.stack((ix_win, iy_win), axis=1)
+            b = -it_win
+
+            # Calculate ATA and ATb for the normal equations
+            ATA = A.T @ A
+            ATb = A.T @ b
+
+            # Solve if the system is well-defined (rank 2) 
+            if np.linalg.matrix_rank(ATA) == 2:
+                nu = np.linalg.solve(ATA, ATb)
+                du[i, j] = nu[0]
+                dv[i, j] = nu[1]
+                
     return du, dv
 
 
@@ -414,22 +517,50 @@ def faster_lucas_kanade_optical_flow(
         (u, v): tuple of np.ndarray-s. Each one of the shape of the
         original image. v encodes the shift in rows and u in columns.
     """
-    h_factor = int(np.ceil(I1.shape[0] / (2 ** num_levels)))
-    w_factor = int(np.ceil(I1.shape[1] / (2 ** num_levels)))
-    IMAGE_SIZE = (w_factor * (2 ** num_levels),
-                  h_factor * (2 ** num_levels))
+    h_factor = int(np.ceil(I1.shape[0] / (2 ** (num_levels - 1))))
+    w_factor = int(np.ceil(I1.shape[1] / (2 ** (num_levels - 1))))
+    IMAGE_SIZE = (w_factor * (2 ** (num_levels - 1)),
+                  h_factor * (2 ** (num_levels - 1)))
     if I1.shape != IMAGE_SIZE:
         I1 = cv2.resize(I1, IMAGE_SIZE)
     if I2.shape != IMAGE_SIZE:
         I2 = cv2.resize(I2, IMAGE_SIZE)
-    pyramid_I1 = build_pyramid(I1, num_levels)  # create levels list for I1
-    pyarmid_I2 = build_pyramid(I2, num_levels)  # create levels list for I1
-    u = np.zeros(pyarmid_I2[-1].shape)  # create u in the size of smallest image
-    v = np.zeros(pyarmid_I2[-1].shape)  # create v in the size of smallest image
+    # create a pyramid from I1 and I2
+    pyramid_I1 = build_pyramid(I1, num_levels)
+    pyarmid_I2 = build_pyramid(I2, num_levels)
+    # start from u and v in the size of smallest image
+    u = np.zeros(pyarmid_I2[-1].shape)
+    v = np.zeros(pyarmid_I2[-1].shape)
     """INSERT YOUR CODE HERE.
-    Replace u and v with their true value."""
-    u = np.zeros(I1.shape)
-    v = np.zeros(I1.shape)
+       Replace u and v with their true value."""
+    # (4) For every level in the image pyramid, starting from the smallest image (deepest level)
+    for level in range(num_levels, -1, -1):
+        level_I1 = pyramid_I1[level]
+        level_I2 = pyarmid_I2[level]
+        
+        # Scale and resize u and v to match the current pyramid level shape
+        h_curr, w_curr = level_I1.shape
+        if u.shape != (h_curr, w_curr):
+            u_resized = cv2.resize(u, (w_curr, h_curr))
+            v_resized = cv2.resize(v, (w_curr, h_curr))
+            
+            # Update flow fields scaled by the ratio of current vs previous level dimensions
+            u = u_resized * (w_curr / u.shape[1])
+            v = v_resized * (h_curr / v.shape[0])
+            
+        # (4.2) Repeat for max_iter iterations at each level
+        for _ in range(max_iter):
+            # (4.1) Warp I2 from that level according to the current u and v
+            I2_warp = warp_image(level_I2, u, v)
+            
+            # (4.2.1) Perform a Lucas Kanade Step with the I1 decimated image 
+            # and the current I2_warp to get the residual displacements
+            du, dv = faster_lucas_kanade_step(level_I1, I2_warp, window_size)
+            
+            # Accumulate the updates into the running flow fields
+            u += du
+            v += dv
+
     return u, v
 
 
@@ -449,7 +580,59 @@ def lucas_kanade_faster_video_stabilization(
         None.
     """
     """INSERT YOUR CODE HERE."""
-    pass
+    cap = cv2.VideoCapture(input_video_path)
+    params = get_video_parameters(cap)
+    fourcc = cv2.VideoWriter_fourcc(*'XVID') 
+    fps = params['fps']
+    size = (params['width'], params['height'])
+    frame_count = params['frame_count']
+    out = cv2.VideoWriter(output_video_path, fourcc, fps, size, isColor=False)
+    h_factor = int(np.ceil(size[1] / (2 ** (num_levels - 1))))
+    w_factor = int(np.ceil(size[0] / (2 ** (num_levels - 1))))
+    IMAGE_SIZE = (w_factor * (2 ** (num_levels - 1)),
+                  h_factor * (2 ** (num_levels - 1)))
+    
+    _, first_frame = cap.read()
+    gray_first_frame = cv2.cvtColor(first_frame, cv2.COLOR_BGR2GRAY)
+    out.write(gray_first_frame)
+    resize_first_frame = cv2.resize(gray_first_frame, IMAGE_SIZE)
+    print(f"Resized first frame shape: {resize_first_frame.shape}")
+    sum_u, sum_v = np.zeros((IMAGE_SIZE[1], IMAGE_SIZE[0])), np.zeros((IMAGE_SIZE[1], IMAGE_SIZE[0]))
+    prev_frame = resize_first_frame.copy()
+    half_win = window_size // 2
+
+    for i in tqdm(range(1, frame_count)):
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        resize_frame = cv2.resize(gray_frame, IMAGE_SIZE)
+
+        u, v = faster_lucas_kanade_optical_flow(prev_frame, resize_frame, window_size, max_iter, num_levels)
+        valid_u = u[half_win:-half_win, half_win:-half_win]
+        valid_v = v[half_win:-half_win, half_win:-half_win]
+
+        mean_u = np.mean(valid_u)
+        mean_v = np.mean(valid_v)
+
+        u[half_win:-half_win, half_win:-half_win] = mean_u
+        v[half_win:-half_win, half_win:-half_win] = mean_v
+
+        sum_u += u
+        sum_v += v
+
+        prev_frame = resize_frame.copy()
+        warped_frame = warp_image(gray_frame, sum_u, sum_v)
+        final_frame = cv2.resize(warped_frame, size)
+
+        final_frame_uint8 = np.clip(final_frame, 0, 255).astype(np.uint8)
+        out.write(final_frame_uint8)
+
+
+    cap.release()
+    out.release()
+    cv2.destroyAllWindows()
 
 
 def lucas_kanade_faster_video_stabilization_fix_effects(
@@ -473,6 +656,57 @@ def lucas_kanade_faster_video_stabilization_fix_effects(
         None.
     """
     """INSERT YOUR CODE HERE."""
-    pass
+    cap = cv2.VideoCapture(input_video_path)
+    params = get_video_parameters(cap)
+    fourcc = cv2.VideoWriter_fourcc(*'XVID') 
+    fps = params['fps']
+    size = (params['width'], params['height'])
+    frame_count = params['frame_count']
+    out = cv2.VideoWriter(output_video_path, fourcc, fps, (size[0] - end_cols - start_cols, size[1] - end_rows - start_rows), isColor=False)
+    h_factor = int(np.ceil(size[1] / (2 ** (num_levels - 1))))
+    w_factor = int(np.ceil(size[0] / (2 ** (num_levels - 1))))
+    IMAGE_SIZE = (w_factor * (2 ** (num_levels - 1)),
+                  h_factor * (2 ** (num_levels - 1)))
+    
+    _, first_frame = cap.read()
+    gray_first_frame = cv2.cvtColor(first_frame, cv2.COLOR_BGR2GRAY)
+    out.write(gray_first_frame[start_rows:size[1] - end_rows, start_cols:size[0] - end_cols])
 
+    resize_first_frame = cv2.resize(gray_first_frame, IMAGE_SIZE)
+    sum_u, sum_v = np.zeros((IMAGE_SIZE[1], IMAGE_SIZE[0])), np.zeros((IMAGE_SIZE[1], IMAGE_SIZE[0]))
+    prev_frame = resize_first_frame.copy()
+    half_win = window_size // 2
+
+    for i in tqdm(range(1, frame_count)):
+        ret, frame = cap.read()
+        if not ret:
+            break
+
+        gray_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        resize_frame = cv2.resize(gray_frame, IMAGE_SIZE)
+
+        u, v = faster_lucas_kanade_optical_flow(prev_frame, resize_frame, window_size, max_iter, num_levels)
+
+        valid_u = u[half_win:-half_win, half_win:-half_win]
+        valid_v = v[half_win:-half_win, half_win:-half_win]
+
+        mean_u = np.mean(valid_u)
+        mean_v = np.mean(valid_v)
+
+        u[half_win:-half_win, half_win:-half_win] = mean_u
+        v[half_win:-half_win, half_win:-half_win] = mean_v
+
+        sum_u += u
+        sum_v += v
+
+        prev_frame = resize_frame.copy()
+        warped_frame = warp_image(gray_frame, sum_u, sum_v)
+        final_frame = cv2.resize(warped_frame, size)
+
+        final_frame_uint8 = np.clip(final_frame, 0, 255).astype(np.uint8)
+        out.write(final_frame_uint8[start_rows:size[1] - end_rows, start_cols:size[0] - end_cols])
+
+    cap.release()
+    out.release()
+    cv2.destroyAllWindows()
 

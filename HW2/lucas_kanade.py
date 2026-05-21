@@ -65,16 +65,13 @@ def build_pyramid(image: np.ndarray, num_levels: int) -> list[np.ndarray]:
     """
     pyramid = [image.copy()]
     """INSERT YOUR CODE HERE."""
-    # Iterate over the levels 
+   
     for i in range(num_levels):
-        # Convolve the PYRAMID_FILTER with the image from the previous level 
+
         blurred = signal.convolve2d(pyramid[i], PYRAMID_FILTER, boundary='symm', mode='same')
-        # Decimate the result using indexing: simply pick every second entry 
         decimated = blurred[::2, ::2]
-        # Append the filtered->decimated result to the end of the list 
         pyramid.append(decimated)
         
-    # The list length should be num_levels + 1 
     return pyramid
 
 
@@ -120,40 +117,32 @@ def lucas_kanade_step(I1: np.ndarray,
 
     du = np.zeros(I1.shape)
     dv = np.zeros(I1.shape)
-    # (1) Calculate Ix and Iy by convolving I2 with the appropriate filters 
     Ix = signal.convolve2d(I2, X_DERIVATIVE_FILTER, boundary='symm', mode='same')
     Iy = signal.convolve2d(I2, Y_DERIVATIVE_FILTER, boundary='symm', mode='same')
     
-    # (2) Calculate It from I1 and I2 
     It = I2 - I1
     
     h, w = I1.shape
     half_win = window_size // 2
 
-    # (3.2) Loop over all pixels in the image, ignoring boundary pixels 
     for i in range(half_win, h - half_win):
         for j in range(half_win, w - half_win):
             
-            # (3.3) Extract NxN window for Ix, Iy, and It 
             ix_win = Ix[i - half_win:i + half_win + 1, j - half_win:j + half_win + 1].flatten()
             iy_win = Iy[i - half_win:i + half_win + 1, j - half_win:j + half_win + 1].flatten()
             it_win = It[i - half_win:i + half_win + 1, j - half_win:j + half_win + 1].flatten()
 
-            # (3.4) Solve for (u, v) using Least-Squares solution 
-            # A * [u, v]^T = -b where A = [Ix, Iy] and b = It
             A = np.stack((ix_win, iy_win), axis=1)
             b = -it_win
 
-            # Calculate ATA and ATb for the normal equations
             ATA = A.T @ A
             ATb = A.T @ b
 
-            # Solve if the system is well-defined (rank 2) 
             if np.linalg.matrix_rank(ATA) == 2:
                 nu = np.linalg.solve(ATA, ATb)
                 du[i, j] = nu[0]
                 dv[i, j] = nu[1]
-            # Otherwise, (u, v) remai
+
     return du, dv
 
 
@@ -192,34 +181,25 @@ def warp_image(image: np.ndarray, u: np.ndarray, v: np.ndarray) -> np.ndarray:
     """
     h, w = image.shape
 
-    # (1) resize the u and v to the shape of the image if they don't match
     if u.shape != (h, w) or v.shape != (h, w):
         u_resized = cv2.resize(u, (w, h))
         v_resized = cv2.resize(v, (w, h))
         
-        # (2) normalize the shift values according to the resizing factor
         u = u_resized * (w / u.shape[1])
         v = v_resized * (h / v.shape[0])
 
-    # (3) define the grid-points using a flattened version of the meshgrid
     x = np.arange(w)
     y = np.arange(h)
     mesh_x, mesh_y = np.meshgrid(x, y)
     
-    # points are the original grid coordinates (0 to w-1, 0 to h-1)
     points = np.stack((mesh_x.flatten(), mesh_y.flatten()), axis=1)
     
-    # values are the pixel intensities of the source image
     values = image.flatten()
     
-    # xi are the points we wish to interpolate (meshgrid shifted by u and v)
     xi = np.stack(((mesh_x + u).flatten(), (mesh_y + v).flatten()), axis=1)
     
-    # (4) perform interpolation using griddata with np.nan as fill_value
     image_warp = griddata(points, values, xi, method='linear', fill_value=np.nan)
     image_warp = image_warp.reshape((h, w))
-    
-    # (5) fill the nan holes with the source image values
     nan_mask = np.isnan(image_warp)
     image_warp[nan_mask] = image[nan_mask]
     return image_warp
@@ -277,36 +257,27 @@ def lucas_kanade_optical_flow(I1: np.ndarray,
     # create a pyramid from I1 and I2
     pyramid_I1 = build_pyramid(I1, num_levels)
     pyarmid_I2 = build_pyramid(I2, num_levels)
-    # start from u and v in the size of smallest image
     u = np.zeros(pyarmid_I2[-1].shape)
     v = np.zeros(pyarmid_I2[-1].shape)
     """INSERT YOUR CODE HERE.
        Replace u and v with their true value."""
-    # (4) For every level in the image pyramid, starting from the smallest image (deepest level)
     for level in range(num_levels, -1, -1):
         level_I1 = pyramid_I1[level]
         level_I2 = pyarmid_I2[level]
         
-        # Scale and resize u and v to match the current pyramid level shape
         h_curr, w_curr = level_I1.shape
         if u.shape != (h_curr, w_curr):
             u_resized = cv2.resize(u, (w_curr, h_curr))
             v_resized = cv2.resize(v, (w_curr, h_curr))
             
-            # Update flow fields scaled by the ratio of current vs previous level dimensions
             u = u_resized * (w_curr / u.shape[1])
             v = v_resized * (h_curr / v.shape[0])
             
-        # (4.2) Repeat for max_iter iterations at each level
         for _ in range(max_iter):
-            # (4.1) Warp I2 from that level according to the current u and v
             I2_warp = warp_image(level_I2, u, v)
             
-            # (4.2.1) Perform a Lucas Kanade Step with the I1 decimated image 
-            # and the current I2_warp to get the residual displacements
             du, dv = lucas_kanade_step(level_I1, I2_warp, window_size)
             
-            # Accumulate the updates into the running flow fields
             u += du
             v += dv
 
@@ -447,50 +418,38 @@ def faster_lucas_kanade_step(I1: np.ndarray,
     du = np.zeros(I1.shape)
     dv = np.zeros(I1.shape)
     
-    # (1) Calculate Ix and Iy by convolving I2 with the appropriate filters 
     Ix = signal.convolve2d(I2, X_DERIVATIVE_FILTER, boundary='symm', mode='same')
     Iy = signal.convolve2d(I2, Y_DERIVATIVE_FILTER, boundary='symm', mode='same')
     
-    # (2) Calculate It from I1 and I2 
     It = I2 - I1
     
     h, w = I1.shape
     half_win = window_size // 2
 
-    # --- HARRIS CORNER DETECTION CHECK ---
     if h > 256 and w > 256:
-        # Normalize I2 to 0-255 range and cast to uint8 for OpenCV compatibility
         I2_uint8 = cv2.normalize(I2, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
         harris_response = cv2.cornerHarris(I2_uint8, blockSize=2, ksize=3, k=0.04)
         
-        # Create a boolean matrix where True represents a strong corner pixel
         is_corner = harris_response > 0.02 * harris_response.max()
     else:
-        # For small images, treat all pixels as valid candidates (all True matrix)
         is_corner = np.ones((h, w), dtype=bool)
 
-    # (3.2) Loop over all pixels in the image, ignoring boundary pixels 
     for i in range(half_win, h - half_win):
         for j in range(half_win, w - half_win):
             
-            # Skip calculation entirely if this pixel is not a corner
             if not is_corner[i, j]:
                 continue
             
-            # (3.3) Extract NxN window for Ix, Iy, and It 
             ix_win = Ix[i - half_win:i + half_win + 1, j - half_win:j + half_win + 1].flatten()
             iy_win = Iy[i - half_win:i + half_win + 1, j - half_win:j + half_win + 1].flatten()
             it_win = It[i - half_win:i + half_win + 1, j - half_win:j + half_win + 1].flatten()
 
-            # (3.4) Solve for (u, v) using Least-Squares solution 
             A = np.stack((ix_win, iy_win), axis=1)
             b = -it_win
 
-            # Calculate ATA and ATb for the normal equations
             ATA = A.T @ A
             ATb = A.T @ b
 
-            # Solve if the system is well-defined (rank 2) 
             if np.linalg.matrix_rank(ATA) == 2:
                 nu = np.linalg.solve(ATA, ATb)
                 du[i, j] = nu[0]
@@ -525,39 +484,29 @@ def faster_lucas_kanade_optical_flow(
         I1 = cv2.resize(I1, IMAGE_SIZE)
     if I2.shape != IMAGE_SIZE:
         I2 = cv2.resize(I2, IMAGE_SIZE)
-    # create a pyramid from I1 and I2
     pyramid_I1 = build_pyramid(I1, num_levels)
     pyarmid_I2 = build_pyramid(I2, num_levels)
-    # start from u and v in the size of smallest image
     u = np.zeros(pyarmid_I2[-1].shape)
     v = np.zeros(pyarmid_I2[-1].shape)
     """INSERT YOUR CODE HERE.
        Replace u and v with their true value."""
-    # (4) For every level in the image pyramid, starting from the smallest image (deepest level)
     for level in range(num_levels, -1, -1):
         level_I1 = pyramid_I1[level]
         level_I2 = pyarmid_I2[level]
         
-        # Scale and resize u and v to match the current pyramid level shape
         h_curr, w_curr = level_I1.shape
         if u.shape != (h_curr, w_curr):
             u_resized = cv2.resize(u, (w_curr, h_curr))
             v_resized = cv2.resize(v, (w_curr, h_curr))
             
-            # Update flow fields scaled by the ratio of current vs previous level dimensions
             u = u_resized * (w_curr / u.shape[1])
             v = v_resized * (h_curr / v.shape[0])
             
-        # (4.2) Repeat for max_iter iterations at each level
         for _ in range(max_iter):
-            # (4.1) Warp I2 from that level according to the current u and v
             I2_warp = warp_image(level_I2, u, v)
             
-            # (4.2.1) Perform a Lucas Kanade Step with the I1 decimated image 
-            # and the current I2_warp to get the residual displacements
             du, dv = faster_lucas_kanade_step(level_I1, I2_warp, window_size)
             
-            # Accumulate the updates into the running flow fields
             u += du
             v += dv
 

@@ -43,25 +43,19 @@ def predict_particles(s_prior: np.ndarray) -> np.ndarray:
 
     """ DELETE THE LINE ABOVE AND:
     INSERT YOUR CODE HERE."""
-    # 1. Apply deterministic drift (the dynamic model A)
+    
     state_drifted = s_prior.copy()
-    state_drifted[0, :] += state_drifted[4, :]  # X_center = X_center + X_velocity
-    state_drifted[1, :] += state_drifted[5, :]  # Y_center = Y_center + Y_velocity
+    state_drifted[0, :] += state_drifted[4, :]
+    state_drifted[1, :] += state_drifted[5, :]
 
-    # 2. Add random additive white noise (diffusion)
-    # Standard deviations for: [X_center, Y_center, Width, Height, V_x, V_y]
-    # Width and Height have 0 noise since they don't have to change between time steps.
-    noise_std = np.array([[5.0],  # X center noise standard deviation
-                          [5.0],  # Y center noise standard deviation
-                          [0.0],  # Half-width noise standard deviation
-                          [0.0],  # Half-height noise standard deviation
-                          [1.0],  # X velocity noise standard deviation
-                          [1.0]])  # Y velocity noise standard deviation
+    noise_std = np.array([[1.0],   # x center noise 
+                          [1.0],   # Y center
+                          [0.0],   # Half-width
+                          [0.0],   # Half-height
+                          [1.0],   # X velocity
+                          [1.0]])  # Y velocity
 
-    # Generate white Gaussian noise matching the shape of the particle matrix
     white_noise = np.random.normal(0.0, 1.0, size=s_prior.shape) * noise_std
-
-    # Combine the deterministic tracking drift with random diffusion
     state_drifted += white_noise
 
     state_drifted = state_drifted.astype(int)
@@ -86,33 +80,24 @@ def compute_normalized_histogram(image: np.ndarray, state: np.ndarray) -> np.nda
     xc, yc, half_w, half_h = state[0], state[1], state[2], state[3]
     img_h, img_w, _ = image.shape
 
-    # Calculate bounding box coordinates and clip to image borders
     x_min = max(0, xc - half_w)
     x_max = min(img_w, xc + half_w)
     y_min = max(0, yc - half_h)
     y_max = min(img_h, yc + half_h)
 
-    # Handle boundary case where patch is outside or empty
     if x_min >= x_max or y_min >= y_max:
         hist = np.ones(16 * 16 * 16) / (16 * 16 * 16)
         return hist
 
-    # Crop the target sub-portion
     crop = image[y_min:y_max, x_min:x_max, :]
-
-    # Quantize from 8-bit (0-255) to 4-bit (0-15)
     quantized = (crop // 16).astype(int)
 
-    # Populate the 3D histogram grid
-    for b in range(quantized.shape[0]):
-        for g in range(quantized.shape[1]):
-            # OpenCV images are loaded in BGR channel layout
-            ch_b, ch_g, ch_r = quantized[b, g, 0], quantized[b, g, 1], quantized[b, g, 2]
+    for h in range(quantized.shape[0]):
+        for w in range(quantized.shape[1]):
+            ch_b, ch_g, ch_r = quantized[h, w, 0], quantized[h, w, 1], quantized[h, w, 2]
             hist[ch_b, ch_g, ch_r] += 1
 
     hist = np.reshape(hist, 16 * 16 * 16)
-
-    # normalize
     hist = hist/sum(hist)
 
     return hist
@@ -133,24 +118,17 @@ def sample_particles(previous_state: np.ndarray, cdf: np.ndarray) -> np.ndarray:
 
     """ DELETE THE LINE ABOVE AND:
         INSERT YOUR CODE HERE."""
-    # Get the total number of particles (N) from the matrix dimensions
+    
     _, N = previous_state.shape
-
-    # 1. Generate N random values uniformly distributed between 0 and 1
+    S_next = np.zeros(previous_state.shape)
     r_values = np.random.uniform(0.0, 1.0, size=N)
 
-    # Repeat the search mapping for each generated random threshold
     for n in range(N):
         r = r_values[n]
-
-        # 2. Find the smallest index 'j' where the CDF value is greater than or equal to r
         j = np.searchsorted(cdf, r)
-
-        # Clip index to protect against floating-point edge cases at exactly 1.0
         j = min(j, N - 1)
-
-        # 3. Set the new particle state to mirror the sampled historic particle index
         S_next[:, n] = previous_state[:, j]
+
     return S_next
 
 
@@ -167,10 +145,8 @@ def bhattacharyya_distance(p: np.ndarray, q: np.ndarray) -> float:
 
     """ DELETE THE LINE ABOVE AND:
         INSERT YOUR CODE HERE."""
-    # Compute the Bhattacharyya coefficient similarity measure
+    
     rho = np.sum(np.sqrt(p * q))
-
-    # Calculate weight mapping based on the required equation
     distance = np.exp(20.0 * rho)
 
     return distance
@@ -189,13 +165,9 @@ def show_particles(image: np.ndarray, state: np.ndarray, W: np.ndarray, frame_in
     """ DELETE THE LINE ABOVE AND:
         INSERT YOUR CODE HERE."""
 
-    # 1. Compute the expected (mean) state across all particles weighted by W
     mean_state = np.sum(state * W, axis=1)
-
-    # 2. Extract components from the mean state vector
     xc_avg, yc_avg, half_w_avg, half_h_avg = mean_state[0], mean_state[1], mean_state[2], mean_state[3]
 
-    # 3. Convert from center/half-size parameters to top-left corner/full-size dimensions
     x_avg = xc_avg - half_w_avg
     y_avg = yc_avg - half_h_avg
     w_avg = 2 * half_w_avg
@@ -209,14 +181,10 @@ def show_particles(image: np.ndarray, state: np.ndarray, W: np.ndarray, frame_in
     """ DELETE THE LINE ABOVE AND:
         INSERT YOUR CODE HERE."""
 
-    # 1. Find the index of the particle holding the highest tracking weight
     max_idx = np.argmax(W)
     max_state = state[:, max_idx]
-
-    # 2. Extract components from this specific highest-weighted particle
     xc_max, yc_max, half_w_max, half_h_max = max_state[0], max_state[1], max_state[2], max_state[3]
 
-    # 3. Convert parameters to top-left corner and full-size bounding box metrics
     x_max = xc_max - half_w_max
     y_max = yc_max - half_h_max
     w_max = 2 * half_w_max
@@ -246,16 +214,12 @@ def main():
     # COMPUTE NORMALIZED WEIGHTS (W) AND PREDICTOR CDFS (C)
     # YOU NEED TO FILL THIS PART WITH CODE:
     """INSERT YOUR CODE HERE."""
-    # Step 4: Loop through all N columns of S to find individual particle weights
     W = np.zeros(N)
     for n in range(N):
         p = compute_normalized_histogram(image, S[:, n])
         W[n] = bhattacharyya_distance(p, q)
 
-    # Step 5: Normalize vector W so that sum(W) == 1
     W /= np.sum(W)
-
-    # Step 6: Compute cumulative distribution vector C using numpy's cumulative sum
     C = np.cumsum(W)
     images_processed = 1
 
@@ -281,6 +245,13 @@ def main():
         # COMPUTE NORMALIZED WEIGHTS (W) AND PREDICTOR CDFS (C)
         # YOU NEED TO FILL THIS PART WITH CODE:
         """INSERT YOUR CODE HERE."""
+        W = np.zeros(N)
+        for n in range(N):
+            p = compute_normalized_histogram(current_image, S[:, n])
+            W[n] = bhattacharyya_distance(p, q)
+
+        W /= np.sum(W)
+        C = np.cumsum(W)
 
         # CREATE DETECTOR PLOTS
         images_processed += 1

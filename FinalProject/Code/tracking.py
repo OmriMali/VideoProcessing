@@ -26,7 +26,7 @@ s_initial = [250,    # x center
              600,    # y center
               120,    # half width
               370,    # half height
-               8,    # velocity x
+               12,    # velocity x
                0]    # velocity y
 
 SCALE_FACTOR = 0.25
@@ -40,7 +40,7 @@ def predict_particles(s_prior: np.ndarray) -> np.ndarray:
     state_drifted[1, :] += state_drifted[5, :]
 
     # Scale the noise standard deviation to match the downscaled coordinate space
-    noise_std = np.array([[0 * SCALE_FACTOR],   # x center noise 
+    noise_std = np.array([[5 * SCALE_FACTOR],   # x center noise 
                           [0 * SCALE_FACTOR],    # Y center
                           [0 * SCALE_FACTOR],   # Half-width
                           [0 * SCALE_FACTOR],    # Half-height

@@ -1,4 +1,5 @@
 import os
+import time
 
 import cv2
 import numpy as np
@@ -60,20 +61,10 @@ def apply_matting(
     """
     Place the extracted foreground onto background.jpg and write matted/alpha videos.
 
-    Parameters
-    ----------
-    extracted_video_path : str
-        Color video containing the walking person on a black background.
-    binary_video_path : str
-        Binary mask video where person pixels are foreground.
-    background_image_path : str
-        Static replacement background image (background.jpg).
-    matted_out_path : str
-        Output composited color video path.
-    alpha_out_path : str
-        Output alpha matte video path (uint8 in [0, 255]).
-    feather_radius : int
-        Gaussian blur radius applied after distance-based alpha estimation.
+    Returns
+    -------
+    tuple (float, float)
+        Accumulated duration spent processing the alpha channel and the composite blending respectively.
     """
     cap_extracted = cv2.VideoCapture(extracted_video_path)
     cap_binary = cv2.VideoCapture(binary_video_path)
@@ -115,6 +106,10 @@ def apply_matting(
 
     print("[Stage 3] Compositing extracted foreground onto background...")
 
+    # Timers for specific tasks
+    alpha_total_time = 0.0
+    matting_total_time = 0.0
+
     frame_idx = 0
     while True:
         ret_fg, foreground = cap_extracted.read()
@@ -128,14 +123,20 @@ def apply_matting(
         else:
             binary_mask = binary_frame
 
+        # Benchmark Alpha Creation
+        t0 = time.time()
         alpha = _binary_mask_to_alpha(binary_mask, feather_radius=feather_radius)
-        matted = _composite_frame(foreground, background, alpha)
-
         alpha_uint8 = (alpha * 255.0).astype(np.uint8)
         alpha_bgr = cv2.cvtColor(alpha_uint8, cv2.COLOR_GRAY2BGR)
-
-        out_matted.write(matted)
         out_alpha.write(alpha_bgr)
+        alpha_total_time += (time.time() - t0)
+
+        # Benchmark Compositing / Matting
+        t1 = time.time()
+        matted = _composite_frame(foreground, background, alpha)
+        out_matted.write(matted)
+        matting_total_time += (time.time() - t1)
+
         frame_idx += 1
 
     cap_extracted.release()
@@ -147,8 +148,10 @@ def apply_matting(
         raise RuntimeError("No frames read for matting")
 
     print("[Stage 3] Matting complete.")
-    print(" -> Matted:", matted_out_path)
-    print(" -> Alpha:", alpha_out_path)
+    print(f" -> Internal Alpha Creation: {alpha_total_time:.2f}s")
+    print(f" -> Internal Compositing: {matting_total_time:.2f}s")
+    
+    return alpha_total_time, matting_total_time
 
 
 if __name__ == "__main__":

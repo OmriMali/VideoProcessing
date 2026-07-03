@@ -7,26 +7,13 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from tqdm import tqdm
 
-ID = "OUTPUT"
-RESULTS = 'results'
-os.makedirs(RESULTS, exist_ok=True)
-code_dir = os.path.dirname(os.path.abspath(__file__))
-root_dir = os.path.dirname(code_dir)
-outputs_dir = os.path.join(root_dir, "Outputs")
-input_path = os.path.join(outputs_dir, "matted_212047542_327703013.avi")
-output_path = os.path.join(outputs_dir, "OUTPUT_212047542_327703013.avi")
-VIDEO_PATH = os.path.join(outputs_dir, "matted_212047542_327703013.avi")
-OUTPUT_VIDEO_PATH = os.path.join(outputs_dir, "OUTPUT_212047542_327703013.avi")
+N = 400 # number of particles
 
-# SET NUMBER OF PARTICLES
-N = 400
-
-# Initial Settings (for original full-size frame)
 s_initial = [250,    # x center
              600,    # y center
-              120,    # half width
-              370,    # half height
-               12,    # velocity x
+              60,    # half width
+              180,   # half height
+               12,   # velocity x
                0]    # velocity y
 
 SCALE_FACTOR = 0.25
@@ -44,7 +31,7 @@ def predict_particles(s_prior: np.ndarray) -> np.ndarray:
                           [0 * SCALE_FACTOR],    # Y center
                           [0 * SCALE_FACTOR],   # Half-width
                           [0 * SCALE_FACTOR],    # Half-height
-                          [0 * SCALE_FACTOR],   # X velocity
+                          [3 * SCALE_FACTOR],   # X velocity
                           [0 * SCALE_FACTOR]])   # Y velocity
 
     white_noise = np.random.normal(0.0, 1.0, size=s_prior.shape) * noise_std
@@ -107,7 +94,7 @@ def bhattacharyya_distance(p: np.ndarray, q: np.ndarray) -> float:
 
 
 def show_particles(image: np.ndarray, state: np.ndarray, W: np.ndarray, frame_index: int, ID: str,
-                  frame_index_to_mean_state: dict, frame_index_to_max_state: dict) -> tuple:
+                    frame_index_to_max_state: dict) -> tuple:
     annotated = image.copy()
 
     # Calculate average state in low-res, then map to high-res by dividing by SCALE_FACTOR
@@ -131,19 +118,18 @@ def show_particles(image: np.ndarray, state: np.ndarray, W: np.ndarray, frame_in
     w_max = int(2 * half_w_max)
     h_max = int(2 * half_h_max)
     
-    cv2.rectangle(annotated, (x_max, y_max), (x_max + w_max, y_max + h_max), (255, 255, 0), 2)
+    cv2.rectangle(annotated, (x_max - s_initial[2], y_max - s_initial[3]), ((x_max + w_max) + s_initial[2], (y_max + h_max) + s_initial[3]), (255, 255, 0), 2)
 
     cv2.putText(annotated, f"{ID} - Frame {frame_index}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
 
-    frame_index_to_mean_state[frame_index] = [float(x) for x in [x_avg, y_avg, w_avg, h_avg]]
-    frame_index_to_max_state[frame_index] = [float(x) for x in [x_max, y_max, w_max, h_max]]
-    return annotated, frame_index_to_mean_state, frame_index_to_max_state
+    frame_index_to_max_state[frame_index] = [float(x) for x in [x_max - s_initial[2], y_max - s_initial[3], w_max, h_max]]
+    return annotated, frame_index_to_max_state
 
 
-def main():
-    cap = cv2.VideoCapture(VIDEO_PATH)
+def apply_tracking(input_video_path: str, output_video_path: str, ID: str):
+    cap = cv2.VideoCapture(input_video_path)
     if not cap.isOpened():
-        raise RuntimeError(f"Unable to open input video: {VIDEO_PATH}")
+        raise RuntimeError(f"Unable to open input video: {input_video_path}")
 
     fps = cap.get(cv2.CAP_PROP_FPS)
     if fps <= 0:
@@ -151,14 +137,14 @@ def main():
     frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fourcc = cv2.VideoWriter_fourcc(*'XVID')
-    writer = cv2.VideoWriter(OUTPUT_VIDEO_PATH, fourcc, fps, (frame_width, frame_height))
+    writer = cv2.VideoWriter(output_video_path, fourcc, fps, (frame_width, frame_height))
 
     frame_index_to_avg_state = {}
     frame_index_to_max_state = {}
 
     ret, image = cap.read()
     if not ret:
-        raise RuntimeError(f"Input video contains no frames: {VIDEO_PATH}")
+        raise RuntimeError(f"Input video contains no frames: {input_video_path}")
         
     resized_image = cv2.resize(image, (0, 0), fx=SCALE_FACTOR, fy=SCALE_FACTOR)
 
@@ -181,8 +167,8 @@ def main():
     C = np.cumsum(W)
     images_processed = 1
 
-    annotated, frame_index_to_avg_state, frame_index_to_max_state = show_particles(
-        image, S, W, images_processed, ID, frame_index_to_avg_state, frame_index_to_max_state)
+    annotated, frame_index_to_max_state = show_particles(
+        image, S, W, images_processed, ID, frame_index_to_max_state)
     writer.write(annotated)
     
     with tqdm(desc="Processing frames", unit="frame") as pbar:
@@ -210,20 +196,16 @@ def main():
                 W[:] = 1.0 / N
             C = np.cumsum(W)
 
-            annotated, frame_index_to_avg_state, frame_index_to_max_state = show_particles(
-                current_image, S, W, images_processed, ID, frame_index_to_avg_state, frame_index_to_max_state)
+            annotated, frame_index_to_max_state = show_particles(
+                current_image, S, W, images_processed, ID, frame_index_to_max_state)
             writer.write(annotated)
 
     cap.release()
     writer.release()
-
-    with open(os.path.join(RESULTS, 'frame_index_to_avg_state.json'), 'w') as f:
-        json.dump(frame_index_to_avg_state, f, indent=4)
-    with open(os.path.join(RESULTS, 'frame_index_to_max_state.json'), 'w') as f:
+    code_dir = os.path.dirname(os.path.abspath(__file__))
+    root_dir = os.path.dirname(code_dir)
+    outputs_dir = os.path.join(root_dir, "Outputs")
+    with open(os.path.join(outputs_dir, 'tracking.json'), 'w') as f:
         json.dump(frame_index_to_max_state, f, indent=4)
 
-    print(f"Tracking complete. Output video: {OUTPUT_VIDEO_PATH}")
-
-
-if __name__ == "__main__":
-    main()
+    print(f"Tracking complete. Output video: {output_video_path}")
